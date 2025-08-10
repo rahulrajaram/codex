@@ -49,6 +49,7 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::live_wrap::RowBuilder;
+use crate::markdown;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
 use ratatui::style::Stylize;
@@ -69,7 +70,6 @@ pub(crate) struct ChatWidget<'a> {
     total_token_usage: TokenUsage,
     last_token_usage: TokenUsage,
     reasoning_buffer: String,
-    content_buffer: String,
     // Buffer for streaming assistant answer text; we do not surface partial
     // We wait for the final AgentMessage event and then emit the full text
     // at once into scrollback so the history contains a single message.
@@ -77,8 +77,11 @@ pub(crate) struct ChatWidget<'a> {
     running_commands: HashMap<String, RunningCommand>,
     live_builder: RowBuilder,
     current_stream: Option<StreamKind>,
+    // maximum rows for live overlay; configured via CLI
+    // maximum preview columns for tool output; None disables fixed width
     stream_header_emitted: bool,
     live_max_rows: u16,
+    preview_max_cols: Option<u16>,
 }
 
 struct UserMessage {
@@ -117,12 +120,11 @@ impl ChatWidget<'_> {
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
             self.bottom_pane.clear_live_ring();
-            self.live_builder = RowBuilder::new(self.live_builder.width());
+            // Avoid premature hard-wrapping by using a very large target width.
+            self.live_builder = RowBuilder::new(usize::MAX);
             self.current_stream = None;
-            self.stream_header_emitted = false;
             self.answer_buffer.clear();
             self.reasoning_buffer.clear();
-            self.content_buffer.clear();
             self.request_redraw();
         }
     }
@@ -161,6 +163,9 @@ impl ChatWidget<'_> {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
+        live_rows: u16,
+        overlay_wrap: bool,
+        preview_max_cols: Option<u16>,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -207,6 +212,7 @@ impl ChatWidget<'_> {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
+                live_ring_wrap: overlay_wrap,
             }),
             active_history_cell: None,
             config,
@@ -217,13 +223,15 @@ impl ChatWidget<'_> {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             reasoning_buffer: String::new(),
-            content_buffer: String::new(),
             answer_buffer: String::new(),
             running_commands: HashMap::new(),
-            live_builder: RowBuilder::new(80),
+            // Avoid pinning to 80 columns. Let the Paragraph in the bottom pane
+            // handle visual wrapping based on the actual terminal width.
+            live_builder: RowBuilder::new(usize::MAX),
             current_stream: None,
             stream_header_emitted: false,
-            live_max_rows: 3,
+            live_max_rows: live_rows,
+            preview_max_cols,
         }
     }
 
@@ -381,10 +389,8 @@ impl ChatWidget<'_> {
                 self.bottom_pane.clear_live_ring();
                 self.live_builder = RowBuilder::new(self.live_builder.width());
                 self.current_stream = None;
-                self.stream_header_emitted = false;
                 self.answer_buffer.clear();
                 self.reasoning_buffer.clear();
-                self.content_buffer.clear();
                 self.request_redraw();
             }
             EventMsg::PlanUpdate(update) => {
@@ -507,7 +513,7 @@ impl ChatWidget<'_> {
                 result,
             }) => {
                 self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
-                    80,
+                    self.preview_max_cols.unwrap_or(u16::MAX),
                     invocation,
                     duration,
                     result
@@ -654,12 +660,12 @@ impl ChatWidget<'_> {
         if self.current_stream != Some(kind) {
             self.current_stream = Some(kind);
             self.stream_header_emitted = false;
-            // Clear any previous live content; we're starting a new stream.
-            self.live_builder = RowBuilder::new(self.live_builder.width());
+            // Clear any previous live content; we're starting a new stream. Use a very
+            // large width so wrapping happens in the renderer, not here.
+            self.live_builder = RowBuilder::new(usize::MAX);
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
-            self.emit_stream_header(kind);
         }
     }
 
@@ -670,7 +676,11 @@ impl ChatWidget<'_> {
         let drained = self
             .live_builder
             .drain_commit_ready(self.live_max_rows as usize);
-        if !drained.is_empty() {
+        // Avoid committing partial content to history for both answers and reasoning so that
+        // the final message can be rendered as a single markdown block. We still update
+        // the live overlay below so the user sees progress.
+        let should_commit_now = false;
+        if should_commit_now && !drained.is_empty() {
             let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
             if !self.stream_header_emitted {
                 match self.current_stream {
@@ -709,9 +719,8 @@ impl ChatWidget<'_> {
         // Flush any partial line as a full row, then drain all remaining rows.
         self.live_builder.end_line();
         let remaining = self.live_builder.drain_rows();
-        // TODO: Re-add markdown rendering for assistant answers and reasoning.
-        // When finalizing, pass the accumulated text through `markdown::append_markdown`
-        // to build styled `Line<'static>` entries instead of raw plain text lines.
+        // Re-add markdown rendering for assistant answers and, for reasoning,
+        // the final remaining chunk.
         if !remaining.is_empty() || !self.stream_header_emitted {
             let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
             if !self.stream_header_emitted {
@@ -725,19 +734,43 @@ impl ChatWidget<'_> {
                 }
                 self.stream_header_emitted = true;
             }
-            for r in remaining {
-                lines.push(ratatui::text::Line::from(r.text));
+
+            match kind {
+                StreamKind::Answer => {
+                    // Render the full assistant answer as a single markdown block.
+                    markdown::append_markdown(
+                        self.answer_buffer.as_str(),
+                        &mut lines,
+                        &self.config,
+                    );
+                }
+                StreamKind::Reasoning => {
+                    // Render the full reasoning as a single markdown block.
+                    markdown::append_markdown(
+                        self.reasoning_buffer.as_str(),
+                        &mut lines,
+                        &self.config,
+                    );
+                }
             }
+
             // Close the block with a blank line for readability.
             lines.push(ratatui::text::Line::from(""));
             self.app_event_tx.send(AppEvent::InsertHistory(lines));
         }
 
         // Clear the live overlay and reset state for the next stream.
-        self.live_builder = RowBuilder::new(self.live_builder.width());
+        // Reset the builder with a very large width to delegate wrapping to the renderer.
+        self.live_builder = RowBuilder::new(usize::MAX);
         self.bottom_pane.clear_live_ring();
         self.current_stream = None;
         self.stream_header_emitted = false;
+
+        // Clear buffers for the completed stream.
+        match kind {
+            StreamKind::Answer => self.answer_buffer.clear(),
+            StreamKind::Reasoning => self.reasoning_buffer.clear(),
+        }
     }
 }
 
