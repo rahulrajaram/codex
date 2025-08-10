@@ -139,24 +139,13 @@ impl ChatWidget<'_> {
         ])
         .areas(area)
     }
-    fn emit_stream_header(&mut self, kind: StreamKind) {
-        use ratatui::text::Line as RLine;
-        if self.stream_header_emitted {
-            return;
-        }
-        let header = match kind {
-            StreamKind::Reasoning => RLine::from("thinking".magenta().italic()),
-            StreamKind::Answer => RLine::from("codex".magenta().bold()),
-        };
-        self.app_event_tx
-            .send(AppEvent::InsertHistory(vec![header]));
-        self.stream_header_emitted = true;
-    }
+    // emit_stream_header no longer used; headers are inserted at finalize.
     fn finalize_active_stream(&mut self) {
         if let Some(kind) = self.current_stream {
             self.finalize_stream(kind);
         }
     }
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         config: Config,
         app_event_tx: AppEventSender,

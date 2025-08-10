@@ -465,6 +465,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -480,6 +481,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Provide 4 rows with max_rows=3; only the last 3 should be visible.
@@ -517,6 +519,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Simulate task running which replaces composer with the status indicator.
@@ -578,6 +581,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Create an approval modal (active view).
@@ -608,6 +612,7 @@ mod tests {
             app_event_tx: tx.clone(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Start a running task so the status indicator replaces the composer.
@@ -658,6 +663,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Begin a task: show initial status.
@@ -694,6 +700,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -746,6 +753,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         pane.set_task_running(true);
