@@ -265,8 +265,26 @@ fn run_ratatui_app(
     let mut terminal = tui::init(&config)?;
     terminal.clear()?;
 
+    // UI options from CLI
+    // Default behavior: soft-wrap (no max cols). If --max-cols is set, it overrides.
+    let overlay_wrap = !cli.max_cols.is_some();
+    let preview_max_cols = if let Some(n) = cli.max_cols {
+        Some(n)
+    } else {
+        None
+    };
+    let live_rows = cli.live_rows;
+
     let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, images, should_show_trust_screen);
+    let mut app = App::new(
+        config.clone(),
+        prompt,
+        images,
+        should_show_trust_screen,
+        live_rows,
+        overlay_wrap,
+        preview_max_cols,
+    );
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {

@@ -8,6 +8,7 @@ use ratatui::widgets::WidgetRef;
 pub(crate) struct LiveRingWidget {
     max_rows: u16,
     rows: Vec<Line<'static>>, // newest at the end
+    wrap: bool,
 }
 
 impl LiveRingWidget {
@@ -15,6 +16,7 @@ impl LiveRingWidget {
         Self {
             max_rows: 3,
             rows: Vec::new(),
+            wrap: false,
         }
     }
 
@@ -24,6 +26,10 @@ impl LiveRingWidget {
 
     pub fn set_rows(&mut self, rows: Vec<Line<'static>>) {
         self.rows = rows;
+    }
+
+    pub fn set_wrap(&mut self, wrap: bool) {
+        self.wrap = wrap;
     }
 
     pub fn desired_height(&self, _width: u16) -> u16 {
@@ -39,7 +45,10 @@ impl WidgetRef for LiveRingWidget {
         }
         let visible = self.rows.len().saturating_sub(self.max_rows as usize);
         let slice = &self.rows[visible..];
-        let para = Paragraph::new(slice.to_vec());
+        let mut para = Paragraph::new(slice.to_vec());
+        if self.wrap {
+            para = para.wrap(ratatui::widgets::Wrap { trim: false });
+        }
         para.render_ref(area, buf);
     }
 }

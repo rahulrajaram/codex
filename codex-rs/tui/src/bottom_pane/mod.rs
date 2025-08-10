@@ -61,6 +61,9 @@ pub(crate) struct BottomPane<'a> {
     /// container used during development before we wire it to ChatWidget events.
     live_ring: Option<live_ring_widget::LiveRingWidget>,
 
+    /// Whether the live ring should soft-wrap to the terminal width.
+    live_ring_wrap: bool,
+
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
     status_view_active: bool,
@@ -70,6 +73,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) live_ring_wrap: bool,
 }
 
 impl BottomPane<'_> {
@@ -89,6 +93,7 @@ impl BottomPane<'_> {
             ctrl_c_quit_hint: false,
             live_status: None,
             live_ring: None,
+            live_ring_wrap: params.live_ring_wrap,
             status_view_active: false,
         }
     }
@@ -357,6 +362,7 @@ impl BottomPane<'_> {
     pub(crate) fn set_live_ring_rows(&mut self, max_rows: u16, rows: Vec<Line<'static>>) {
         let mut w = live_ring_widget::LiveRingWidget::new();
         w.set_max_rows(max_rows);
+        w.set_wrap(self.live_ring_wrap);
         w.set_rows(rows);
         self.live_ring = Some(w);
     }
@@ -459,6 +465,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -474,6 +481,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Provide 4 rows with max_rows=3; only the last 3 should be visible.
@@ -511,6 +519,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Simulate task running which replaces composer with the status indicator.
@@ -572,6 +581,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Create an approval modal (active view).
@@ -602,6 +612,7 @@ mod tests {
             app_event_tx: tx.clone(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Start a running task so the status indicator replaces the composer.
@@ -652,6 +663,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Begin a task: show initial status.
@@ -688,6 +700,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -740,6 +753,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            live_ring_wrap: false,
         });
 
         pane.set_task_running(true);

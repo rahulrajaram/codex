@@ -56,4 +56,13 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Maximum columns used for preview/truncation in history cells (e.g., tool output).
+    /// If set, caps preview width; otherwise previews are uncapped (soft‑wrap, default).
+    #[arg(long = "max-cols", value_name = "N")]
+    pub max_cols: Option<u16>,
+
+    /// Number of rows to show in the transient live overlay ring above the composer.
+    #[arg(long = "live-rows", value_name = "N", default_value_t = 3)]
+    pub live_rows: u16,
 }

@@ -64,6 +64,11 @@ pub(crate) struct App<'a> {
     pending_history_lines: Vec<Line<'static>>,
 
     enhanced_keys_supported: bool,
+
+    // UI options passed from CLI
+    live_rows: u16,
+    overlay_wrap: bool,
+    preview_max_cols: Option<u16>,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -74,6 +79,9 @@ pub(crate) struct ChatWidgetArgs {
     initial_prompt: Option<String>,
     initial_images: Vec<PathBuf>,
     enhanced_keys_supported: bool,
+    live_rows: u16,
+    overlay_wrap: bool,
+    preview_max_cols: Option<u16>,
 }
 
 impl App<'_> {
@@ -82,6 +90,9 @@ impl App<'_> {
         initial_prompt: Option<String>,
         initial_images: Vec<std::path::PathBuf>,
         show_trust_screen: bool,
+        live_rows: u16,
+        overlay_wrap: bool,
+        preview_max_cols: Option<u16>,
     ) -> Self {
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
@@ -139,6 +150,9 @@ impl App<'_> {
                 initial_prompt,
                 initial_images,
                 enhanced_keys_supported,
+                live_rows,
+                overlay_wrap,
+                preview_max_cols,
             };
             AppState::Onboarding {
                 screen: OnboardingScreen::new(OnboardingScreenArgs {
@@ -157,6 +171,9 @@ impl App<'_> {
                 initial_prompt,
                 initial_images,
                 enhanced_keys_supported,
+                live_rows,
+                overlay_wrap,
+                preview_max_cols,
             );
             AppState::Chat {
                 widget: Box::new(chat_widget),
@@ -173,6 +190,9 @@ impl App<'_> {
             file_search,
             pending_redraw,
             enhanced_keys_supported,
+            live_rows,
+            overlay_wrap,
+            preview_max_cols,
         }
     }
 
@@ -319,6 +339,9 @@ impl App<'_> {
                             None,
                             Vec::new(),
                             self.enhanced_keys_supported,
+                            self.live_rows,
+                            self.overlay_wrap,
+                            self.preview_max_cols,
                         ));
                         self.app_state = AppState::Chat { widget: new_widget };
                         self.app_event_tx.send(AppEvent::RequestRedraw);
@@ -426,6 +449,9 @@ impl App<'_> {
                     enhanced_keys_supported,
                     initial_images,
                     initial_prompt,
+                    live_rows,
+                    overlay_wrap,
+                    preview_max_cols,
                 }) => {
                     self.app_state = AppState::Chat {
                         widget: Box::new(ChatWidget::new(
@@ -434,6 +460,9 @@ impl App<'_> {
                             initial_prompt,
                             initial_images,
                             enhanced_keys_supported,
+                            live_rows,
+                            overlay_wrap,
+                            preview_max_cols,
                         )),
                     }
                 }
