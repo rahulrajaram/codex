@@ -166,6 +166,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             proto::run_main(proto_cli).await?;
         }
         Some(Subcommand::Completion(completion_cli)) => {
+            println!("It got to here");
             print_completion(completion_cli);
         }
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
