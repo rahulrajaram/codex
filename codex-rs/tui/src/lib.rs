@@ -265,8 +265,25 @@ fn run_ratatui_app(
     let mut terminal = tui::init(&config)?;
     terminal.clear()?;
 
+    // UI options from CLI
+    let overlay_wrap = cli.no_max_cols;
+    let preview_max_cols = if cli.no_max_cols {
+        None
+    } else {
+        Some(cli.max_cols.unwrap_or(80))
+    };
+    let live_rows = cli.live_rows;
+
     let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, images, should_show_trust_screen);
+    let mut app = App::new(
+        config.clone(),
+        prompt,
+        images,
+        should_show_trust_screen,
+        live_rows,
+        overlay_wrap,
+        preview_max_cols,
+    );
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {

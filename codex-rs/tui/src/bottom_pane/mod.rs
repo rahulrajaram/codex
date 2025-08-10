@@ -61,6 +61,9 @@ pub(crate) struct BottomPane<'a> {
     /// container used during development before we wire it to ChatWidget events.
     live_ring: Option<live_ring_widget::LiveRingWidget>,
 
+    /// Whether the live ring should soft-wrap to the terminal width.
+    live_ring_wrap: bool,
+
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
     status_view_active: bool,
@@ -70,6 +73,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) live_ring_wrap: bool,
 }
 
 impl BottomPane<'_> {
@@ -89,6 +93,7 @@ impl BottomPane<'_> {
             ctrl_c_quit_hint: false,
             live_status: None,
             live_ring: None,
+            live_ring_wrap: params.live_ring_wrap,
             status_view_active: false,
         }
     }
@@ -357,6 +362,7 @@ impl BottomPane<'_> {
     pub(crate) fn set_live_ring_rows(&mut self, max_rows: u16, rows: Vec<Line<'static>>) {
         let mut w = live_ring_widget::LiveRingWidget::new();
         w.set_max_rows(max_rows);
+        w.set_wrap(self.live_ring_wrap);
         w.set_rows(rows);
         self.live_ring = Some(w);
     }
