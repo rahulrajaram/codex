@@ -84,7 +84,15 @@ pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
             // Truncate to max_graphemes - 3 and add "..." to stay within limit
             let mut truncate_graphemes = text.grapheme_indices(true);
             if let Some((truncate_byte_index, _)) = truncate_graphemes.nth(max_graphemes - 3) {
-                let truncated = &text[..truncate_byte_index];
+                // Prefer not to split words: backtrack to the last whitespace if possible
+                let candidate = &text[..truncate_byte_index];
+                let cut_at = candidate
+                    .rmatch_indices(char::is_whitespace)
+                    .map(|(idx, _)| idx)
+                    .next()
+                    .unwrap_or(truncate_byte_index);
+                let truncated = &text[..cut_at];
+                let truncated = truncated.trim_end_matches(char::is_whitespace);
                 format!("{truncated}...")
             } else {
                 text.to_string()
