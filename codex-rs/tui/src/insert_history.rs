@@ -20,7 +20,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 
 /// Insert `lines` above the viewport.
-pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
+pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line<'static>>) {
     let mut out = std::io::stdout();
     insert_history_lines_to_writer(terminal, &mut out, lines);
 }
@@ -30,7 +30,7 @@ pub(crate) fn insert_history_lines(terminal: &mut tui::Tui, lines: Vec<Line>) {
 pub fn insert_history_lines_to_writer<B, W>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
     writer: &mut W,
-    lines: Vec<Line>,
+    lines: Vec<Line<'static>>,
 ) where
     B: ratatui::backend::Backend,
     W: Write,
@@ -93,7 +93,26 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     for line in lines {
         queue!(writer, Print("\r\n")).ok();
-        write_spans(writer, line.iter()).ok();
+        // Merge the line-level style into each span so that colors/modifiers
+        // applied to the entire line are preserved when we emit ANSI. The
+        // renderer in ratatui applies line.style during draw, but this
+        // insert-history path writes ANSI directly and previously ignored
+        // line.style, causing loss of e.g. DarkGray applied at the line level.
+        let patched_spans: Vec<Span<'static>> = line
+            .spans
+            .into_iter()
+            .map(|s| {
+                let mut merged = s.style;
+                // Span overrides line when set; otherwise inherit from line.
+                merged.fg = merged.fg.or(line.style.fg);
+                merged.bg = merged.bg.or(line.style.bg);
+                merged.underline_color = merged.underline_color.or(line.style.underline_color);
+                merged.add_modifier |= line.style.add_modifier;
+                merged.sub_modifier |= line.style.sub_modifier;
+                Span::styled(s.content, merged)
+            })
+            .collect();
+        write_spans(writer, patched_spans.iter()).ok();
     }
 
     queue!(writer, ResetScrollRegion).ok();

@@ -52,6 +52,8 @@ use crate::live_wrap::RowBuilder;
 use crate::markdown;
 use crate::user_approval_widget::ApprovalRequest;
 use codex_file_search::FileMatch;
+use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 
 struct RunningCommand {
@@ -693,7 +695,13 @@ impl ChatWidget<'_> {
             .live_builder
             .display_rows()
             .into_iter()
-            .map(|r| ratatui::text::Line::from(r.text))
+            .map(|r| {
+                let line = ratatui::text::Line::from(r.text);
+                match self.current_stream {
+                    Some(StreamKind::Reasoning) => line.style(Style::default().fg(Color::DarkGray)),
+                    _ => line,
+                }
+            })
             .collect::<Vec<_>>();
         self.bottom_pane
             .set_live_ring_rows(self.live_max_rows, rows);
@@ -714,7 +722,11 @@ impl ChatWidget<'_> {
             if !self.stream_header_emitted {
                 match kind {
                     StreamKind::Reasoning => {
-                        lines.push(ratatui::text::Line::from("thinking".magenta().italic()));
+                        lines.push(ratatui::text::Line::from(
+                            "thinking"
+                                .italic()
+                                .style(Style::default().fg(Color::DarkGray)),
+                        ));
                     }
                     StreamKind::Answer => {
                         lines.push(ratatui::text::Line::from("codex".magenta().bold()));
@@ -734,11 +746,18 @@ impl ChatWidget<'_> {
                 }
                 StreamKind::Reasoning => {
                     // Render the full reasoning as a single markdown block.
+                    let content_start = lines.len();
                     markdown::append_markdown(
                         self.reasoning_buffer.as_str(),
                         &mut lines,
                         &self.config,
                     );
+                    // Apply muted styling to the reasoning block for readability.
+                    for i in content_start..lines.len() {
+                        let styled = std::mem::take(&mut lines[i])
+                            .style(Style::default().fg(Color::DarkGray));
+                        lines[i] = styled;
+                    }
                 }
             }
 

@@ -267,12 +267,8 @@ fn run_ratatui_app(
 
     // UI options from CLI
     // Default behavior: soft-wrap (no max cols). If --max-cols is set, it overrides.
-    let overlay_wrap = !cli.max_cols.is_some();
-    let preview_max_cols = if let Some(n) = cli.max_cols {
-        Some(n)
-    } else {
-        None
-    };
+    let overlay_wrap = cli.max_cols.is_none();
+    let preview_max_cols = cli.max_cols;
     let live_rows = cli.live_rows;
 
     let Cli { prompt, images, .. } = cli;

@@ -206,7 +206,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     );
                     self.reasoning_started = true;
                 }
-                print!("{delta}");
+                // Dim the streamed reasoning content for better readability.
+                print!("{}", delta.style(self.dimmed));
                 #[allow(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
@@ -215,7 +216,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     return CodexStatus::Running;
                 }
                 if !self.raw_reasoning_started {
-                    print!("{text}");
+                    // Dim the raw reasoning block as well.
+                    print!("{}", text.style(self.dimmed));
                     #[allow(clippy::expect_used)]
                     std::io::stdout().flush().expect("could not flush stdout");
                 } else {
@@ -232,7 +234,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 if !self.raw_reasoning_started {
                     self.raw_reasoning_started = true;
                 }
-                print!("{delta}");
+                // Dim the streamed raw reasoning content.
+                print!("{}", delta.style(self.dimmed));
                 #[allow(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
@@ -478,8 +481,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         ts_println!(
                             self,
                             "{}\n{}",
-                            "codex".style(self.italic).style(self.magenta),
-                            agent_reasoning_event.text,
+                            // Finalize with the proper 'thinking' header and dim the content.
+                            "thinking".style(self.italic).style(self.magenta),
+                            agent_reasoning_event.text.style(self.dimmed),
                         );
                     } else {
                         println!();
