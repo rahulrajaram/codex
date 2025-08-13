@@ -31,7 +31,10 @@ fn replace_unordered_markers_outside_code_fences(src: &str) -> Cow<'_, str> {
             continue;
         }
 
-        if !in_fence && leading_spaces < 4 {
+        // Outside of fenced code blocks, replace common unordered list markers with
+        // a bullet regardless of indentation so nested list items are shown
+        // correctly. We keep the original leading spaces to preserve nesting.
+        if !in_fence {
             let tail = trimmed_start;
             if tail.starts_with("- ") || tail.starts_with("* ") || tail.starts_with("+ ") {
                 if i > 0 {
@@ -43,6 +46,71 @@ fn replace_unordered_markers_outside_code_fences(src: &str) -> Cow<'_, str> {
                 out.push_str(&tail[2..]);
                 changed = true;
                 continue;
+            }
+        }
+
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+
+    if changed {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(src)
+    }
+}
+
+/// Escape ordered list markers (e.g., `1. `, `2. `) at the start of lines when
+/// outside fenced code blocks. This prevents the markdown renderer from
+/// converting them into structured list layouts that may split the marker and
+/// content across different visual lines in the terminal. By escaping the dot
+/// (e.g., `1\.`), we preserve the appearance ("1. foo") but keep it on a single
+/// line as plain text.
+fn escape_ordered_markers_outside_code_fences(src: &str) -> Cow<'_, str> {
+    let mut in_fence = false;
+    let mut out = String::new();
+    let mut changed = false;
+
+    for (i, line) in src.lines().enumerate() {
+        let trimmed_start = line.trim_start();
+        // Toggle fence state on lines starting with ``` (ignoring leading spaces).
+        if trimmed_start.starts_with("```") {
+            in_fence = !in_fence;
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+            continue;
+        }
+
+        if !in_fence {
+            // Match optional spaces, then one or more digits, then a dot and a space.
+            // Example matches: "1. foo", "  12. bar".
+            let mut j = 0usize;
+            let bytes = trimmed_start.as_bytes();
+            // Require at least one digit at the beginning of the trimmed segment.
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > 0 && j + 1 < bytes.len() && trimmed_start[j..].starts_with('.') {
+                // Ensure a space follows the dot (markdown list pattern)
+                let after_dot = j + '.'.len_utf8();
+                if after_dot < trimmed_start.len() && trimmed_start[after_dot..].starts_with(' ') {
+                    // Escape the dot to render as plain text (keeps number inline).
+                    if i > 0 {
+                        out.push('\n');
+                    }
+                    // Rebuild: original leading spaces, digits, escaped dot, remainder
+                    let leading_spaces = line.len() - trimmed_start.len();
+                    out.push_str(&" ".repeat(leading_spaces));
+                    out.push_str(&trimmed_start[..j]);
+                    out.push_str("\\.");
+                    out.push_str(&trimmed_start[after_dot..]);
+                    changed = true;
+                    continue;
+                }
             }
         }
 
@@ -79,8 +147,10 @@ fn append_markdown_with_opener_and_cwd(
     // renderer. When `file_opener` is absent we bypass the transformation to
     // avoid unnecessary allocations.
     let processed_markdown = rewrite_file_citations(markdown_source, file_opener, cwd);
+    // Prevent structured ordered-lists which may split marker/content across lines.
+    let ordered_escaped = escape_ordered_markers_outside_code_fences(&processed_markdown);
     // Swap hyphen-based list markers with bullets outside code fences for readability.
-    let bullet_adjusted = replace_unordered_markers_outside_code_fences(&processed_markdown);
+    let bullet_adjusted = replace_unordered_markers_outside_code_fences(&ordered_escaped);
 
     let markdown = tui_markdown::from_str(&bullet_adjusted);
 
@@ -132,6 +202,11 @@ fn append_markdown_with_opener_and_cwd(
             owned_spans.push(owned_span);
         }
 
+        // If a list item starts with a term of the form "• Term:" or
+        // "1. Term:", color the term for readability.
+        owned_spans = colorize_bullet_term(owned_spans);
+        owned_spans = colorize_ordered_term(owned_spans);
+
         // No post-processing needed here; list marker conversion happens pre-render.
 
         let owned_line: Line<'static> = Line::from(owned_spans).style(borrowed_line.style);
@@ -143,6 +218,214 @@ fn append_markdown_with_opener_and_cwd(
 
         lines.push(owned_line);
     }
+}
+
+/// If a line begins with an unordered bullet (possibly indented) followed by a
+/// term and a colon, color just the term to make scan-reading easier.
+fn colorize_bullet_term(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    use crate::colors::LIGHT_BLUE;
+
+    // Rebuild the full line text and track span boundaries.
+    let mut full = String::new();
+    let mut boundaries: Vec<(usize, usize, Span<'static>)> = Vec::with_capacity(spans.len());
+    for s in spans.into_iter() {
+        let start = full.len();
+        full.push_str(&s.content);
+        let end = full.len();
+        boundaries.push((start, end, s));
+    }
+
+    // Match: optional spaces, bullet, spaces, capture term (non-colon) until a colon
+    // Example: "  • Term: rest" -> capture "Term".
+    let bytes = full.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    if i < bytes.len() && full[i..].starts_with('•') {
+        i += '•'.len_utf8();
+        // Require at least one space after bullet
+        let mut j = i;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        // Capture until the next ':'
+        let term_start = j;
+        while j < bytes.len() {
+            let ch = full[j..].chars().next().unwrap();
+            if ch == ':' {
+                break;
+            }
+            // Stop if we encounter a newline (shouldn't happen within a single line)
+            if ch == '\n' {
+                return boundaries.into_iter().map(|(_, _, s)| s).collect();
+            }
+            j += ch.len_utf8();
+        }
+        let term_end = j;
+        if term_end > term_start
+            && j < bytes.len()
+            && full[term_start..term_end]
+                .chars()
+                .any(|c| !c.is_whitespace())
+        {
+            // Re-split spans so that [term_start, term_end) is a distinct span colored LIGHT_BLUE.
+            let mut out: Vec<Span<'static>> = Vec::new();
+            let mut cursor = 0usize;
+            for (s_start, s_end, s) in boundaries {
+                if s_end <= term_start || s_start >= term_end {
+                    // Entire span outside the term range.
+                    out.push(s);
+                    cursor = s_end;
+                } else {
+                    // Overlaps with term range, split as needed.
+                    let content = s.content;
+                    let mut local = 0usize; // offset within this span
+                    // Prefix before the term portion
+                    if term_start > s_start {
+                        let len = term_start - s_start;
+                        out.push(Span::styled(
+                            content[local..local + len].to_string(),
+                            s.style,
+                        ));
+                        local += len;
+                    }
+                    // Term segment
+                    let term_len = (term_end - s_start).saturating_sub(local);
+                    if term_len > 0 {
+                        let mut style = s.style;
+                        style.fg = Some(LIGHT_BLUE);
+                        out.push(Span::styled(
+                            content[local..local + term_len].to_string(),
+                            style,
+                        ));
+                        local += term_len;
+                    }
+                    // Suffix after the term portion
+                    if s_start + local < s_end {
+                        out.push(Span::styled(content[local..].to_string(), s.style));
+                    }
+                }
+            }
+            return out;
+        }
+    }
+    // No match or unsuitable for coloring.
+    boundaries.into_iter().map(|(_, _, s)| s).collect()
+}
+
+/// If a line begins with an ordered list marker (digits + '.'), followed by a
+/// term and a colon, color just the term in pink to make scan-reading easier.
+fn colorize_ordered_term(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    use crate::colors::PINK;
+
+    // Rebuild the full line text and track span boundaries.
+    let mut full = String::new();
+    let mut boundaries: Vec<(usize, usize, Span<'static>)> = Vec::with_capacity(spans.len());
+    for s in spans.into_iter() {
+        let start = full.len();
+        full.push_str(&s.content);
+        let end = full.len();
+        boundaries.push((start, end, s));
+    }
+
+    // Pattern: optional spaces, 1+ digits, '.' (or escaped "\."), space(s), then term until ':'
+    let bytes = full.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    // Require at least one digit
+    let mut j = i;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == i {
+        return boundaries.into_iter().map(|(_, _, s)| s).collect();
+    }
+
+    // Accept either "." or "\\." produced by the markdown escape.
+    let mut after_marker = j;
+    if full[after_marker..].starts_with("\\.") {
+        after_marker += 2; // skip backslash and dot
+    } else if full[after_marker..].starts_with('.') {
+        after_marker += 1; // skip dot
+    } else {
+        return boundaries.into_iter().map(|(_, _, s)| s).collect();
+    }
+
+    // Require at least one space after the dot
+    let mut k = after_marker;
+    let mut saw_space = false;
+    while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+        saw_space = true;
+        k += 1;
+    }
+    if !saw_space {
+        return boundaries.into_iter().map(|(_, _, s)| s).collect();
+    }
+
+    // Capture term until ':'
+    let term_start = k;
+    while k < bytes.len() {
+        let ch = full[k..].chars().next().unwrap();
+        if ch == ':' {
+            break;
+        }
+        if ch == '\n' {
+            return boundaries.into_iter().map(|(_, _, s)| s).collect();
+        }
+        k += ch.len_utf8();
+    }
+    let term_end = k;
+
+    if term_end > term_start
+        && k < bytes.len()
+        && full[term_start..term_end]
+            .chars()
+            .any(|c| !c.is_whitespace())
+    {
+        // Re-split spans so that [term_start, term_end) is a distinct span colored PINK.
+        let mut out: Vec<Span<'static>> = Vec::new();
+        for (s_start, s_end, s) in boundaries {
+            if s_end <= term_start || s_start >= term_end {
+                // Entire span outside the term range.
+                out.push(s);
+            } else {
+                // Overlaps with term range, split as needed.
+                let content = s.content;
+                let mut local = 0usize; // offset within this span
+                // Prefix before the term portion
+                if term_start > s_start {
+                    let len = term_start - s_start;
+                    out.push(Span::styled(
+                        content[local..local + len].to_string(),
+                        s.style,
+                    ));
+                    local += len;
+                }
+                // Term segment
+                let term_len = (term_end - s_start).saturating_sub(local);
+                if term_len > 0 {
+                    let mut style = s.style;
+                    style.fg = Some(PINK);
+                    out.push(Span::styled(
+                        content[local..local + term_len].to_string(),
+                        style,
+                    ));
+                    local += term_len;
+                }
+                // Suffix after the term portion
+                if s_start + local < s_end {
+                    out.push(Span::styled(content[local..].to_string(), s.style));
+                }
+            }
+        }
+        return out;
+    }
+
+    // No match or unsuitable for coloring.
+    boundaries.into_iter().map(|(_, _, s)| s).collect()
 }
 
 /// Rewrites file citations in `src` into markdown hyperlinks using the
@@ -258,7 +541,7 @@ mod tests {
     fn bullets_replace_unordered_markers_outside_fences() {
         let src = "- one\n  - two\n    - three";
         let out = replace_unordered_markers_outside_code_fences(src);
-        assert_eq!(out, "• one\n  • two\n    - three");
+        assert_eq!(out, "• one\n  • two\n    • three");
     }
 
     #[test]
@@ -269,9 +552,30 @@ mod tests {
     }
 
     #[test]
-    fn bullets_not_replaced_in_indented_code_blocks() {
-        let src = "    - literal hyphen in code\n- real item";
+    fn bullets_are_replaced_even_with_indentation_outside_fences() {
+        let src = "    - nested item\n- real item";
         let out = replace_unordered_markers_outside_code_fences(src);
-        assert_eq!(out, "    - literal hyphen in code\n• real item");
+        assert_eq!(out, "    • nested item\n• real item");
+    }
+
+    #[test]
+    fn escape_ordered_markers_outside_fences_basic() {
+        let src = "1. first\n2. second";
+        let out = escape_ordered_markers_outside_code_fences(src);
+        assert_eq!(out, "1\\. first\n2\\. second");
+    }
+
+    #[test]
+    fn escape_ordered_markers_preserves_indentation() {
+        let src = "  10. ten\n    3. three";
+        let out = escape_ordered_markers_outside_code_fences(src);
+        assert_eq!(out, "  10\\. ten\n    3\\. three");
+    }
+
+    #[test]
+    fn do_not_escape_inside_code_fences() {
+        let src = "```\n1. not list\n```\n1. real list";
+        let out = escape_ordered_markers_outside_code_fences(src);
+        assert_eq!(out, "```\n1. not list\n```\n1\\. real list");
     }
 }
