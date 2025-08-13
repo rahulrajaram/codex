@@ -58,6 +58,10 @@ pub(crate) struct ChatComposer {
     use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
+    /// When set, indicates the last query for which we intentionally forced a
+    /// glob search (via Tab). Used to suppress the immediate fuzzy search that
+    /// `sync_file_search_popup` would otherwise dispatch in the same tick.
+    last_forced_glob_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
@@ -88,6 +92,7 @@ impl ChatComposer {
             use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
+            last_forced_glob_query: None,
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
@@ -200,6 +205,44 @@ impl ChatComposer {
 
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        // Global quick-open: Ctrl+P toggles the file-search popup, similar to VS Code.
+        if matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+        ) {
+            match &self.active_popup {
+                // If already visible, hide it.
+                ActivePopup::File(_) => {
+                    self.active_popup = ActivePopup::None;
+                    return (InputResult::None, true);
+                }
+                _ => {
+                    // Ensure there is an @token to drive the existing popup logic.
+                    if Self::current_at_token(&self.textarea).is_none() {
+                        self.textarea.insert_str("@");
+                    }
+                    // Clear any dismissal latch so the popup reopens.
+                    self.dismissed_file_popup_token = None;
+                    // Immediately sync to show the popup for the current token.
+                    self.sync_file_search_popup();
+                    if let Some(q) =
+                        Self::current_at_token(&self.textarea).filter(|q| !q.is_empty())
+                    {
+                        self.last_forced_glob_query = Some(q.clone());
+                        self.app_event_tx.send(AppEvent::StartFileSearchWithMode {
+                            query: q,
+                            mode: crate::app_event::FileSearchMode::ForceGlob,
+                        });
+                    }
+                    return (InputResult::None, true);
+                }
+            }
+        }
+
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
@@ -325,6 +368,51 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    /// Compute the start and end byte indices of the `@token` under the cursor, if any.
+    /// Returns (start_idx, end_idx) excluding the leading `@` (i.e., the slice corresponds
+    /// to the token text without `@`).
+    fn token_bounds_at_cursor(&self) -> Option<(usize, usize)> {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+
+        let mut safe_cursor = cursor_offset.min(text.len());
+        if safe_cursor < text.len() && !text.is_char_boundary(safe_cursor) {
+            safe_cursor = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= cursor_offset)
+                .last()
+                .unwrap_or(0);
+        }
+
+        let before = &text[..safe_cursor];
+        let after = &text[safe_cursor..];
+
+        // Determine token boundaries including an optional leading '@'
+        let start_idx_incl_at = before
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        let end_idx = safe_cursor
+            + after
+                .char_indices()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(i, _)| i)
+                .unwrap_or(after.len());
+
+        if start_idx_incl_at >= end_idx {
+            return None;
+        }
+        // Must start with '@'
+        if !text[start_idx_incl_at..].starts_with('@') {
+            return None;
+        }
+        // Exclude the leading '@'
+        let start_idx = start_idx_incl_at.saturating_add('@'.len_utf8());
+        Some((start_idx, end_idx))
     }
 
     /// Extract the `@token` that the cursor is currently positioned on, if any.
@@ -471,6 +559,35 @@ impl ChatComposer {
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         match key_event {
+            // Pressing Tab should surface path suggestions. If there's no
+            // active @token under the cursor, insert one to trigger the
+            // file-search popup logic on the subsequent sync.
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            } => {
+                let token = Self::current_at_token(&self.textarea);
+                eprintln!(
+                    "DEBUG: Tab pressed. Text: '{}', Cursor: {}, Token: {:?}",
+                    self.textarea.text(),
+                    self.textarea.cursor(),
+                    token
+                );
+                if token.is_none() {
+                    eprintln!("DEBUG: Token is None, inserting @");
+                    self.textarea.insert_str("@");
+                } else if let Some(query) = token.as_ref().filter(|q| !q.is_empty()) {
+                    eprintln!("DEBUG: Found non-empty query '{query}', triggering file search");
+                    // Force a one-shot glob search for the current query.
+                    self.last_forced_glob_query = Some(query.clone());
+                    self.app_event_tx.send(AppEvent::StartFileSearchWithMode {
+                        query: query.clone(),
+                        mode: crate::app_event::FileSearchMode::ForceGlob,
+                    });
+                } else {
+                    eprintln!("DEBUG: Token is Some but empty: {token:?}");
+                }
+                (InputResult::None, true)
+            }
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
@@ -618,7 +735,7 @@ impl ChatComposer {
             return;
         }
 
-        if !query.is_empty() {
+        if !query.is_empty() && self.last_forced_glob_query.as_deref() != Some(&query) {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(query.clone()));
         }
@@ -642,7 +759,11 @@ impl ChatComposer {
             }
         }
 
-        self.current_file_query = Some(query);
+        self.current_file_query = Some(query.clone());
+        // Clear the forced-glob latch once we've synced the popup for the same query.
+        if self.last_forced_glob_query.as_deref() == Some(&query) {
+            self.last_forced_glob_query = None;
+        }
         self.dismissed_file_popup_token = None;
     }
 
@@ -747,6 +868,33 @@ impl WidgetRef for &ChatComposer {
             Line::from(BASE_PLACEHOLDER_TEXT)
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
+        }
+
+        // Render a ghost suggestion (dim inline completion) for file paths when applicable.
+        if let ActivePopup::File(popup) = &self.active_popup {
+            if let (Some((tok_start, tok_end)), Some(sel)) =
+                (self.token_bounds_at_cursor(), popup.selected_match())
+            {
+                let text = self.textarea.text();
+                // Show ghost only when cursor is at end of the @token
+                if self.textarea.cursor() == tok_end {
+                    let query = &text[tok_start..tok_end];
+                    if let Some(rem) = sel.strip_prefix(query) {
+                        if !rem.is_empty() {
+                            if let Some((cx, cy)) =
+                                self.textarea.cursor_pos_with_state(textarea_rect, &state)
+                            {
+                                buf.set_string(
+                                    cx,
+                                    cy,
+                                    rem,
+                                    Style::default().add_modifier(Modifier::DIM),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

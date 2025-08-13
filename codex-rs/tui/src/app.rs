@@ -471,6 +471,13 @@ impl App<'_> {
                         self.file_search.on_user_query(query);
                     }
                 }
+                AppEvent::StartFileSearchWithMode { query, mode } => {
+                    if !query.is_empty() {
+                        let force_glob =
+                            matches!(mode, crate::app_event::FileSearchMode::ForceGlob);
+                        self.file_search.on_user_query_with_mode(query, force_glob);
+                    }
+                }
                 AppEvent::FileSearchResult { query, matches } => {
                     if let AppState::Chat { widget } = &mut self.app_state {
                         widget.apply_file_search_result(query, matches);

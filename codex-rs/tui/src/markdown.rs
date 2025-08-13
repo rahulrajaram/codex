@@ -1,10 +1,63 @@
 use crate::citation_regex::CITATION_REGEX;
 use codex_core::config::Config;
 use codex_core::config_types::UriBasedFileOpener;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use std::borrow::Cow;
 use std::path::Path;
+
+/// Convert leading unordered list markers ('-', '*', '+') to '• ' but only when
+/// not inside fenced code blocks (``` ... ```). Also skip lines indented with
+/// 4 or more spaces to avoid altering indented code blocks. Preserves nesting
+/// indentation for list items.
+fn replace_unordered_markers_outside_code_fences(src: &str) -> Cow<'_, str> {
+    let mut in_fence = false;
+    let mut out = String::new();
+    let mut changed = false;
+
+    for (i, line) in src.lines().enumerate() {
+        let trimmed_start = line.trim_start();
+        let leading_spaces = line.len() - trimmed_start.len();
+
+        // Toggle fence state on lines starting with ``` (ignoring leading spaces).
+        if trimmed_start.starts_with("```") {
+            in_fence = !in_fence;
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+            continue;
+        }
+
+        if !in_fence && leading_spaces < 4 {
+            let tail = trimmed_start;
+            if tail.starts_with("- ") || tail.starts_with("* ") || tail.starts_with("+ ") {
+                if i > 0 {
+                    out.push('\n');
+                }
+                out.push_str(&" ".repeat(leading_spaces));
+                out.push('•');
+                out.push(' ');
+                out.push_str(&tail[2..]);
+                changed = true;
+                continue;
+            }
+        }
+
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+
+    if changed {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(src)
+    }
+}
 
 #[allow(dead_code)]
 pub(crate) fn append_markdown(
@@ -26,8 +79,10 @@ fn append_markdown_with_opener_and_cwd(
     // renderer. When `file_opener` is absent we bypass the transformation to
     // avoid unnecessary allocations.
     let processed_markdown = rewrite_file_citations(markdown_source, file_opener, cwd);
+    // Swap hyphen-based list markers with bullets outside code fences for readability.
+    let bullet_adjusted = replace_unordered_markers_outside_code_fences(&processed_markdown);
 
-    let markdown = tui_markdown::from_str(&processed_markdown);
+    let markdown = tui_markdown::from_str(&bullet_adjusted);
 
     // `tui_markdown` returns a `ratatui::text::Text` where every `Line` borrows
     // from the input `message` string. Since the `HistoryCell` stores its lines
@@ -37,11 +92,47 @@ fn append_markdown_with_opener_and_cwd(
 
     for borrowed_line in markdown.lines {
         let mut owned_spans = Vec::with_capacity(borrowed_line.spans.len());
+
+        // Heuristic: treat a line as a heading when all non-empty spans are bold.
+        let is_heading_line = {
+            let mut has_non_empty = false;
+            let mut all_bold = true;
+            for s in &borrowed_line.spans {
+                if !s.content.trim().is_empty() {
+                    has_non_empty = true;
+                    // Access Modifier bits from the style to detect bold.
+                    if !s.style.add_modifier.contains(Modifier::BOLD) {
+                        all_bold = false;
+                        break;
+                    }
+                }
+            }
+            has_non_empty && all_bold
+        };
+
         for span in &borrowed_line.spans {
             // Create a new owned String for the span's content to break the lifetime link.
-            let owned_span = Span::styled(span.content.to_string(), span.style);
+            let mut style = span.style;
+
+            // Apply requested colors based on markdown semantics.
+            if is_heading_line {
+                style.fg = Some(Color::Yellow);
+            } else {
+                // Bold -> cyan
+                if style.add_modifier.contains(Modifier::BOLD) {
+                    style.fg = Some(Color::Cyan);
+                }
+                // Italic -> cream (#FFFDD0)
+                if style.add_modifier.contains(Modifier::ITALIC) {
+                    style.fg = Some(Color::Rgb(255, 253, 208));
+                }
+            }
+
+            let owned_span = Span::styled(span.content.to_string(), style);
             owned_spans.push(owned_span);
         }
+
+        // No post-processing needed here; list marker conversion happens pre-render.
 
         let owned_line: Line<'static> = Line::from(owned_spans).style(borrowed_line.style);
         // Preserve alignment if it was set on the source line.
@@ -161,5 +252,26 @@ mod tests {
         assert_eq!(markdown, rendered);
         // Ensure helper rewrites.
         assert_ne!(markdown, unchanged);
+    }
+
+    #[test]
+    fn bullets_replace_unordered_markers_outside_fences() {
+        let src = "- one\n  - two\n    - three";
+        let out = replace_unordered_markers_outside_code_fences(src);
+        assert_eq!(out, "• one\n  • two\n    - three");
+    }
+
+    #[test]
+    fn bullets_not_replaced_inside_fences() {
+        let src = "```\n- not a list\n```\n- real list";
+        let out = replace_unordered_markers_outside_code_fences(src);
+        assert_eq!(out, "```\n- not a list\n```\n• real list");
+    }
+
+    #[test]
+    fn bullets_not_replaced_in_indented_code_blocks() {
+        let src = "    - literal hyphen in code\n- real item";
+        let out = replace_unordered_markers_outside_code_fences(src);
+        assert_eq!(out, "    - literal hyphen in code\n• real item");
     }
 }

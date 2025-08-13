@@ -152,6 +152,11 @@ pub fn run(
     // that we can leverage the parallelism it provides.
     let mut walk_builder = WalkBuilder::new(search_directory);
     walk_builder.threads(num_walk_builder_threads);
+    walk_builder.ignore(false);
+    walk_builder.git_ignore(false);
+    walk_builder.git_global(false);
+    walk_builder.git_exclude(false);
+    walk_builder.hidden(false);
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {
