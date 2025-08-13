@@ -285,9 +285,9 @@ impl ChatWidget<'_> {
                 });
         }
 
-        // Only show text portion in conversation history for now.
+        // Show the text portion in conversation history, rendered as markdown.
         if !text.is_empty() {
-            self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
+            self.add_to_history(HistoryCell::new_user_prompt(text.clone(), &self.config));
         }
     }
 
