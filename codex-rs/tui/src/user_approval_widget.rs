@@ -118,21 +118,34 @@ impl UserApprovalWidget<'_> {
                 command, reason, ..
             } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                // Present a single-line summary without cwd: "codex wants to run: <cmd>"
-                let mut cmd_span: Span = cmd.clone().into();
-                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
-                let mut contents: Vec<Line> = vec![
-                    Line::from(vec![
-                        "? ".fg(Color::Blue),
-                        "Codex wants to run ".bold(),
-                        cmd_span,
-                    ]),
-                    Line::from(""),
-                ];
+                // Show header on one line, and render the command verbatim
+                // on following lines, preserving any existing newlines and
+                // comments. Avoid injecting extra line continuations or
+                // escaping that could visually alter the command.
+                let mut contents: Vec<Line> = vec![Line::from(vec![
+                    "? ".fg(Color::Blue),
+                    "Codex wants to run".bold(),
+                ])];
+
+                for (idx, line) in cmd.lines().enumerate() {
+                    let mut display_line = String::new();
+                    if idx > 0 {
+                        display_line.push_str("    ");
+                    }
+                    display_line.push_str(line.trim_end());
+
+                    let mut span: Span = display_line.into();
+                    span.style = span.style.add_modifier(Modifier::DIM);
+                    contents.push(Line::from(span));
+                }
+
+                contents.push(Line::from(""));
+
                 if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));
                 }
+
                 Paragraph::new(contents).wrap(Wrap { trim: false })
             }
             ApprovalRequest::ApplyPatch {
@@ -240,20 +253,15 @@ impl UserApprovalWidget<'_> {
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                let mut cmd_span: Span = cmd.clone().into();
-                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
 
-                // Result line based on decision.
+                // Result header based on decision (without inlining the command).
                 match decision {
                     ReviewDecision::Approved => {
                         lines.push(Line::from(vec![
                             "✓ ".fg(Color::Green),
                             "You ".into(),
                             "approved".bold(),
-                            " codex to run ".into(),
-                            cmd_span,
-                            " ".into(),
-                            "this time".bold(),
+                            " codex to run this time".into(),
                         ]));
                     }
                     ReviewDecision::ApprovedForSession => {
@@ -261,10 +269,7 @@ impl UserApprovalWidget<'_> {
                             "✓ ".fg(Color::Green),
                             "You ".into(),
                             "approved".bold(),
-                            " codex to run ".into(),
-                            cmd_span,
-                            " ".into(),
-                            "every time this session".bold(),
+                            " codex to run every time this session".into(),
                         ]));
                     }
                     ReviewDecision::Denied => {
@@ -272,8 +277,7 @@ impl UserApprovalWidget<'_> {
                             "✗ ".fg(Color::Red),
                             "You ".into(),
                             "did not approve".bold(),
-                            " codex to run ".into(),
-                            cmd_span,
+                            " codex to run".into(),
                         ]));
                     }
                     ReviewDecision::Abort => {
@@ -281,10 +285,18 @@ impl UserApprovalWidget<'_> {
                             "✗ ".fg(Color::Red),
                             "You ".into(),
                             "canceled".bold(),
-                            " the request to run ".into(),
-                            cmd_span,
+                            " the request to run".into(),
                         ]));
                     }
+                }
+
+                // Show the command exactly as it was, preserving newlines and comments.
+                for line in cmd.lines() {
+                    let mut display = String::from("    ");
+                    display.push_str(line.trim_end());
+                    let mut span: Span = display.into();
+                    span.style = span.style.add_modifier(Modifier::DIM);
+                    lines.push(Line::from(span));
                 }
             }
             ApprovalRequest::ApplyPatch { .. } => {
