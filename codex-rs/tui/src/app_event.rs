@@ -6,6 +6,16 @@ use ratatui::text::Line;
 use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
 
+/// Mode to use for file searching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FileSearchMode {
+    /// Default mode: fuzzy matching across the workspace.
+    #[allow(dead_code)]
+    Fuzzy,
+    /// Force a single-shot glob search (used on initial Tab stroke).
+    ForceGlob,
+}
+
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
@@ -39,6 +49,13 @@ pub(crate) enum AppEvent {
     /// the `@`). Previous searches may be cancelled by the app layer so there
     /// is at most one in-flight search.
     StartFileSearch(String),
+
+    /// Same as `StartFileSearch` but with an explicit mode to override
+    /// default behavior (e.g., force a glob search when the user hits Tab).
+    StartFileSearchWithMode {
+        query: String,
+        mode: FileSearchMode,
+    },
 
     /// Result of a completed asynchronous file search. The `query` echoes the
     /// original search term so the UI can decide whether the results are
