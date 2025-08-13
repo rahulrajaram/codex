@@ -152,6 +152,10 @@ fn append_markdown_with_opener_and_cwd(
     // Swap hyphen-based list markers with bullets outside code fences for readability.
     let bullet_adjusted = replace_unordered_markers_outside_code_fences(&ordered_escaped);
 
+    // Compute heading levels per source line before rendering so we can style
+    // them deterministically after rendering.
+    let heading_levels = compute_heading_levels_outside_code_fences(&bullet_adjusted);
+
     let markdown = tui_markdown::from_str(&bullet_adjusted);
 
     // `tui_markdown` returns a `ratatui::text::Text` where every `Line` borrows
@@ -160,32 +164,19 @@ fn append_markdown_with_opener_and_cwd(
     // so that it is no longer tied to `message`. We do this by cloning the
     // content of every `Span` into an owned `String`.
 
-    for borrowed_line in markdown.lines {
+    for (line_idx, borrowed_line) in markdown.lines.into_iter().enumerate() {
         let mut owned_spans = Vec::with_capacity(borrowed_line.spans.len());
 
-        // Heuristic: treat a line as a heading when all non-empty spans are bold.
-        let is_heading_line = {
-            let mut has_non_empty = false;
-            let mut all_bold = true;
-            for s in &borrowed_line.spans {
-                if !s.content.trim().is_empty() {
-                    has_non_empty = true;
-                    // Access Modifier bits from the style to detect bold.
-                    if !s.style.add_modifier.contains(Modifier::BOLD) {
-                        all_bold = false;
-                        break;
-                    }
-                }
-            }
-            has_non_empty && all_bold
-        };
+        // Determine if this source line is a heading based on precomputed levels.
+        let heading_level = heading_levels.get(line_idx).and_then(|v| *v);
 
         for span in &borrowed_line.spans {
             // Create a new owned String for the span's content to break the lifetime link.
             let mut style = span.style;
 
             // Apply requested colors based on markdown semantics.
-            if is_heading_line {
+            if heading_level.is_some() {
+                // Color all headings uniformly for now.
                 style.fg = Some(Color::Yellow);
             } else {
                 // Bold -> cyan
@@ -223,7 +214,7 @@ fn append_markdown_with_opener_and_cwd(
 /// If a line begins with an unordered bullet (possibly indented) followed by a
 /// term and a colon, color just the term to make scan-reading easier.
 fn colorize_bullet_term(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
-    use crate::colors::LIGHT_BLUE;
+    use crate::colors::PINK;
 
     // Rebuild the full line text and track span boundaries.
     let mut full = String::new();
@@ -294,7 +285,7 @@ fn colorize_bullet_term(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
                     let term_len = (term_end - s_start).saturating_sub(local);
                     if term_len > 0 {
                         let mut style = s.style;
-                        style.fg = Some(LIGHT_BLUE);
+                        style.fg = Some(PINK);
                         out.push(Span::styled(
                             content[local..local + term_len].to_string(),
                             style,
@@ -312,6 +303,42 @@ fn colorize_bullet_term(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
     }
     // No match or unsuitable for coloring.
     boundaries.into_iter().map(|(_, _, s)| s).collect()
+}
+
+/// Compute heading levels (H1..H6) per source line, ignoring fenced code blocks.
+/// A heading is a line that starts with 1–6 `#` characters followed by a space.
+fn compute_heading_levels_outside_code_fences(src: &str) -> Vec<Option<u8>> {
+    let mut in_fence = false;
+    let mut levels = Vec::new();
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            levels.push(None);
+            continue;
+        }
+        if in_fence {
+            levels.push(None);
+            continue;
+        }
+        let mut count = 0usize;
+        for ch in trimmed.chars() {
+            if ch == '#' {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        if (1..=6).contains(&count) {
+            let after_hashes = &trimmed[count..];
+            if after_hashes.starts_with(' ') {
+                levels.push(Some(count as u8));
+                continue;
+            }
+        }
+        levels.push(None);
+    }
+    levels
 }
 
 /// If a line begins with an ordered list marker (digits + '.'), followed by a
