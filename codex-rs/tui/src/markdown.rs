@@ -8,6 +8,35 @@ use ratatui::text::Span;
 use std::borrow::Cow;
 use std::path::Path;
 
+/// Safely slice a string by byte indices, clamping to bounds and realigning
+/// to the nearest valid UTF-8 boundaries. Returns an empty string slice if the
+/// computed range is invalid.
+fn safe_slice<'a>(s: &'a str, start: usize, end: usize) -> &'a str {
+    let len = s.len();
+    if len == 0 {
+        return "";
+    }
+    let mut s_idx = start.min(len);
+    let mut e_idx = end.min(len);
+    if s_idx >= e_idx {
+        return "";
+    }
+    if let Some(sub) = s.get(s_idx..e_idx) {
+        return sub;
+    }
+    // Realign to char boundaries if needed.
+    while s_idx < len && !s.is_char_boundary(s_idx) {
+        s_idx += 1;
+    }
+    while e_idx > s_idx && !s.is_char_boundary(e_idx) {
+        e_idx -= 1;
+    }
+    if s_idx >= e_idx {
+        return "";
+    }
+    s.get(s_idx..e_idx).unwrap_or("")
+}
+
 /// Convert leading unordered list markers ('-', '*', '+') to '• ' but only when
 /// not inside fenced code blocks (``` ... ```). Also skip lines indented with
 /// 4 or more spaces to avoid altering indented code blocks. Preserves nesting
@@ -262,39 +291,45 @@ fn colorize_bullet_term(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
         {
             // Re-split spans so that [term_start, term_end) is a distinct span colored LIGHT_BLUE.
             let mut out: Vec<Span<'static>> = Vec::new();
-            let mut cursor = 0usize;
             for (s_start, s_end, s) in boundaries {
                 if s_end <= term_start || s_start >= term_end {
                     // Entire span outside the term range.
                     out.push(s);
-                    cursor = s_end;
                 } else {
-                    // Overlaps with term range, split as needed.
+                    // Overlaps with term range. Split into prefix, term, suffix
+                    // clamping indices to the span bounds to avoid OOB slicing.
                     let content = s.content;
-                    let mut local = 0usize; // offset within this span
-                    // Prefix before the term portion
-                    if term_start > s_start {
-                        let len = term_start - s_start;
-                        out.push(Span::styled(
-                            content[local..local + len].to_string(),
-                            s.style,
-                        ));
-                        local += len;
+                    let span_term_start = term_start.max(s_start);
+                    let span_term_end = term_end.min(s_end);
+
+                    // Prefix: from start of span to start of term within span.
+                    if span_term_start > s_start {
+                        let pre_len = span_term_start - s_start;
+                        let pre = safe_slice(&content, 0, pre_len);
+                        if !pre.is_empty() {
+                            out.push(Span::styled(pre.to_string(), s.style));
+                        }
                     }
-                    // Term segment
-                    let term_len = (term_end - s_start).saturating_sub(local);
-                    if term_len > 0 {
+
+                    // Term segment within this span.
+                    if span_term_end > span_term_start {
                         let mut style = s.style;
                         style.fg = Some(PINK);
-                        out.push(Span::styled(
-                            content[local..local + term_len].to_string(),
-                            style,
-                        ));
-                        local += term_len;
+                        let start = span_term_start - s_start;
+                        let end = span_term_end - s_start;
+                        let mid = safe_slice(&content, start, end);
+                        if !mid.is_empty() {
+                            out.push(Span::styled(mid.to_string(), style));
+                        }
                     }
-                    // Suffix after the term portion
-                    if s_start + local < s_end {
-                        out.push(Span::styled(content[local..].to_string(), s.style));
+
+                    // Suffix: from end of term within span to end of span.
+                    if span_term_end < s_end {
+                        let start = span_term_end - s_start;
+                        let suf = safe_slice(&content, start, content.len());
+                        if !suf.is_empty() {
+                            out.push(Span::styled(suf.to_string(), s.style));
+                        }
                     }
                 }
             }
@@ -419,32 +454,40 @@ fn colorize_ordered_term(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
                 // Entire span outside the term range.
                 out.push(s);
             } else {
-                // Overlaps with term range, split as needed.
+                // Overlaps with term range. Split into prefix, term, suffix
+                // clamping indices to the span bounds to avoid OOB slicing.
                 let content = s.content;
-                let mut local = 0usize; // offset within this span
-                // Prefix before the term portion
-                if term_start > s_start {
-                    let len = term_start - s_start;
-                    out.push(Span::styled(
-                        content[local..local + len].to_string(),
-                        s.style,
-                    ));
-                    local += len;
+                let span_term_start = term_start.max(s_start);
+                let span_term_end = term_end.min(s_end);
+
+                // Prefix: from start of span to start of term within span.
+                if span_term_start > s_start {
+                    let pre_len = span_term_start - s_start;
+                    let pre = safe_slice(&content, 0, pre_len);
+                    if !pre.is_empty() {
+                        out.push(Span::styled(pre.to_string(), s.style));
+                    }
                 }
-                // Term segment
-                let term_len = (term_end - s_start).saturating_sub(local);
-                if term_len > 0 {
+
+                // Term segment within this span.
+                if span_term_end > span_term_start {
                     let mut style = s.style;
                     style.fg = Some(PINK);
-                    out.push(Span::styled(
-                        content[local..local + term_len].to_string(),
-                        style,
-                    ));
-                    local += term_len;
+                    let start = span_term_start - s_start;
+                    let end = span_term_end - s_start;
+                    let mid = safe_slice(&content, start, end);
+                    if !mid.is_empty() {
+                        out.push(Span::styled(mid.to_string(), style));
+                    }
                 }
-                // Suffix after the term portion
-                if s_start + local < s_end {
-                    out.push(Span::styled(content[local..].to_string(), s.style));
+
+                // Suffix: from end of term within span to end of span.
+                if span_term_end < s_end {
+                    let start = span_term_end - s_start;
+                    let suf = safe_slice(&content, start, content.len());
+                    if !suf.is_empty() {
+                        out.push(Span::styled(suf.to_string(), s.style));
+                    }
                 }
             }
         }
