@@ -193,6 +193,14 @@ impl BottomPane<'_> {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
+        // If the status indicator view is active, close it to allow pasting
+        // into the composer. This ensures programmatic pastes (e.g., voice
+        // transcript) are not dropped while the status line is visible.
+        if self.status_view_active {
+            self.active_view = None;
+            self.status_view_active = false;
+        }
+
         if self.active_view.is_none() {
             let needs_redraw = self.composer.handle_paste(pasted);
             if needs_redraw {
@@ -205,6 +213,15 @@ impl BottomPane<'_> {
     /// the StatusIndicatorView so the input pane shows a single-line status
     /// like: `▌ Working waiting for model`.
     pub(crate) fn update_status_text(&mut self, text: String) {
+        // Empty text is treated as a request to clear any status overlays/views.
+        if text.trim().is_empty() {
+            self.live_status = None;
+            self.status_view_active = false;
+            self.active_view = None;
+            self.request_redraw();
+            return;
+        }
+
         let mut handled_by_view = false;
         if let Some(view) = self.active_view.as_mut() {
             if matches!(

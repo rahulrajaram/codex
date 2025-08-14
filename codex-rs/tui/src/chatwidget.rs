@@ -51,6 +51,7 @@ use crate::history_cell::PatchEventType;
 use crate::live_wrap::RowBuilder;
 use crate::markdown;
 use crate::user_approval_widget::ApprovalRequest;
+use crate::voice::VOICE_ACTIVE;
 use codex_file_search::FileMatch;
 use ratatui::style::Stylize;
 
@@ -535,9 +536,14 @@ impl ChatWidget<'_> {
         }
     }
 
-    /// Update the live log preview while a task is running.
+    /// Update the live status line with the latest log.
+    ///
+    /// Show while a task is running or while voice is active; otherwise ignore
+    /// non-empty lines to prevent the overlay from lingering when idle. An
+    /// empty line is treated as a request to clear the overlay.
     pub(crate) fn update_latest_log(&mut self, line: String) {
-        if self.bottom_pane.is_task_running() {
+        let is_voice_active = VOICE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed);
+        if self.bottom_pane.is_task_running() || is_voice_active || line.trim().is_empty() {
             self.bottom_pane.update_status_text(line);
         }
     }

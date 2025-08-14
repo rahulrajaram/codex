@@ -22,6 +22,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::voice::VOICE_ACTIVE;
 
 // We render the live text using markdown so it visually matches the history
 // cells. Before rendering we strip any ANSI escape sequences to avoid writing
@@ -225,6 +226,15 @@ impl WidgetRef for StatusIndicatorWidget {
             Style::default().fg(Color::DarkGray),
         ));
         spans.push(Span::raw(" "));
+
+        // Optional voice recording badge
+        if VOICE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+            spans.push(Span::styled(
+                "[REC]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+        }
 
         // Space after header
         // Animated header after the left bar

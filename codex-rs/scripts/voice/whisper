@@ -1,0 +1,6 @@
+#!/bin/bash
+# Codex Voice Integration - Whisper Wrapper Script
+# This script provides a simple interface to the whisper_cli.py for codex TUI
+
+cd "$(dirname "$0")"
+python3 whisper_cli.py "$@"

@@ -171,12 +171,44 @@ impl RowBuilder {
                 // Fits entirely; keep in buffer (do not push yet) so we can append more later.
                 break;
             } else {
-                // Emit wrapped prefix as a non-explicit row and continue with the remainder.
-                self.rows.push(Row {
-                    text: prefix,
-                    explicit_break: false,
-                });
-                self.current_line = suffix.to_string();
+                // Prefer wrapping at the last whitespace within the prefix to avoid
+                // splitting words across lines. If no whitespace exists, fall back to
+                // hard wrapping at the width boundary.
+                let break_at = prefix
+                    .rmatch_indices(char::is_whitespace)
+                    .map(|(idx, _)| idx)
+                    .next();
+
+                if let Some(idx) = break_at {
+                    let ws_ch = prefix[idx..].chars().next().unwrap();
+                    if idx + ws_ch.len_utf8() == prefix.len() {
+                        // Whitespace is the last char in the prefix; keep it on the left side
+                        // to match prior behavior and expectations, and continue with the suffix.
+                        self.rows.push(Row {
+                            text: prefix.clone(),
+                            explicit_break: false,
+                        });
+                        self.current_line = suffix.to_string();
+                    } else {
+                        let left = prefix[..idx].to_string();
+                        self.rows.push(Row {
+                            text: left,
+                            explicit_break: false,
+                        });
+                        // Build the remainder starting right after the break whitespace and
+                        // dropping additional leading spaces for clean left-justified lines.
+                        let mut remainder = prefix[idx..].to_string();
+                        remainder.push_str(suffix);
+                        self.current_line = remainder.trim_start().to_string();
+                    }
+                } else {
+                    // No whitespace to wrap at; emit the hard-wrapped prefix.
+                    self.rows.push(Row {
+                        text: prefix,
+                        explicit_break: false,
+                    });
+                    self.current_line = suffix.to_string();
+                }
             }
         }
     }
@@ -220,11 +252,15 @@ mod tests {
             rows,
             vec![
                 Row {
-                    text: "hello whir".to_string(),
+                    text: "hello".to_string(),
                     explicit_break: false
                 },
                 Row {
-                    text: "l this is ".to_string(),
+                    text: "whirl".to_string(),
+                    explicit_break: false
+                },
+                Row {
+                    text: "this is a ".to_string(),
                     explicit_break: false
                 }
             ]

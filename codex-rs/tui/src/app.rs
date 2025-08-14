@@ -23,6 +23,7 @@ use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
 use ratatui::text::Line;
 use std::path::PathBuf;
+use std::path::PathBuf as StdPathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -30,6 +31,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
+
+use crate::voice::WhisperController;
 
 /// Time window for debouncing redraw requests.
 const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
@@ -69,6 +72,9 @@ pub(crate) struct App<'a> {
     live_rows: u16,
     overlay_wrap: bool,
     preview_max_cols: Option<u16>,
+
+    /// Voice recorder controller (whisper integration)
+    voice: WhisperController,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -181,6 +187,47 @@ impl App<'_> {
         };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        // Resolve whisper executable and cwd from env, bundled scripts, or default path.
+        let (whisper_exe, whisper_cwd) = {
+            if let Ok(exe) = std::env::var("CODEX_VOICE_WHISPER_EXE") {
+                // User-specified executable path
+                let exe_path = StdPathBuf::from(&exe);
+                let cwd = exe_path
+                    .parent()
+                    .map(StdPathBuf::from)
+                    .unwrap_or_else(|| StdPathBuf::from("."));
+                (exe_path, cwd)
+            } else {
+                // Check for bundled scripts first
+                let current_exe = std::env::current_exe().unwrap_or_default();
+                let bundled_scripts_dir = current_exe
+                    .parent()
+                    .and_then(|p| p.parent()) // Go up from target/debug or target/release
+                    .map(|p| p.join("scripts/voice"))
+                    .unwrap_or_else(|| StdPathBuf::from("scripts/voice"));
+                
+                if bundled_scripts_dir.join("whisper").exists() {
+                    // Use bundled whisper script
+                    (bundled_scripts_dir.join("whisper"), bundled_scripts_dir)
+                } else {
+                    // Fall back to user-specified directory or default
+                    let dir = std::env::var("CODEX_VOICE_WHISPER_DIR")
+                        .map(StdPathBuf::from)
+                        .unwrap_or_else(|_| StdPathBuf::from("/home/rahul/Documents/whisper"));
+                    // Try common script names if plain `whisper` is not present.
+                    let candidates = ["whisper", "whisper.sh", "whisper.py"];
+                    let exe = candidates
+                        .iter()
+                        .map(|name| dir.join(name))
+                        .find(|p| p.exists() && p.is_file())
+                        .unwrap_or_else(|| dir.join("whisper"));
+                    (exe, dir)
+                }
+            }
+        };
+
+        let voice = WhisperController::new(whisper_exe, whisper_cwd);
         Self {
             app_event_tx,
             pending_history_lines: Vec::new(),
@@ -193,6 +240,7 @@ impl App<'_> {
             live_rows,
             overlay_wrap,
             preview_max_cols,
+            voice,
         }
     }
 
@@ -300,6 +348,32 @@ impl App<'_> {
                                 AppState::Onboarding { .. } => {
                                     self.app_event_tx.send(AppEvent::ExitRequest);
                                 }
+                            }
+                        }
+                        // Toggle voice recording on Ctrl+R or F9 for any non-release event.
+                        // Be tolerant of extra modifiers (e.g., SHIFT) and key repeats.
+                        key_event
+                            if ((matches!(key_event.code, KeyCode::Char('r'))
+                                && key_event
+                                    .modifiers
+                                    .contains(crossterm::event::KeyModifiers::CONTROL))
+                                || matches!(key_event.code, KeyCode::F(9)))
+                                && key_event.kind != KeyEventKind::Release =>
+                        {
+                            // Toggle voice recording using whisper
+                            if self.voice.is_active() {
+                                self.voice.stop();
+                                self.app_event_tx
+                                    .send(AppEvent::LatestLog("🎙 Voice stopped".to_string()));
+                                // Ensure footer updates immediately
+                                self.app_event_tx.send(AppEvent::RequestRedraw);
+                            } else {
+                                self.app_event_tx.send(AppEvent::LatestLog(
+                                    "🎙 Voice recording… (Ctrl+R to stop)".to_string(),
+                                ));
+                                let tx = self.app_event_tx.clone();
+                                self.voice.start(tx);
+                                self.app_event_tx.send(AppEvent::RequestRedraw);
                             }
                         }
                         KeyEvent {

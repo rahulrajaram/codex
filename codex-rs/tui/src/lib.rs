@@ -47,6 +47,7 @@ mod text_block;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;
+mod voice;
 
 #[cfg(not(debug_assertions))]
 mod updates;

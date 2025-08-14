@@ -814,6 +814,19 @@ impl WidgetRef for &ChatComposer {
                     ]
                 };
 
+                // Append a small recording badge when voice is active.
+                if crate::voice::VOICE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+                    hint.push(Span::from("   "));
+                    hint.push(Span::styled("●", Style::default().fg(Color::Red)));
+                    hint.push(Span::styled(
+                        " Recording",
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ));
+                    hint.push(Span::from("   "));
+                    hint.push("Ctrl+R".set_style(key_hint_style));
+                    hint.push(Span::from(" stop"));
+                }
+
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
                     let token_usage = &token_usage_info.total_token_usage;
